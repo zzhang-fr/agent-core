@@ -135,3 +135,31 @@ def test_ability_manager_revision_changes_only_when_registry_changes():
     assert manager.registry_revision == 2
     assert manager.remove("first") is None
     assert manager.registry_revision == 2
+
+
+@pytest.mark.asyncio
+async def test_model_tool_list_does_not_depend_on_registration_order():
+    names = ["read_file", "plugin_alpha", "bash", "plugin_bravo", "free_search", "paid_search"]
+    listed = []
+    for order in (names, list(reversed(names)), names[3:] + names[:3]):
+        manager = AbilityManager(owner_id="order-agent")
+        for name in order:
+            assert manager.add(ToolCard(id=name, name=name)).added is True
+        listed.append([info.name for info in await manager.list_tool_info()])
+
+    assert listed[0] == listed[1] == listed[2]
+    assert listed[0] == ["bash", "paid_search", "free_search", "plugin_alpha", "plugin_bravo", "read_file"]
+
+
+@pytest.mark.asyncio
+async def test_tool_added_later_takes_its_place_by_name():
+    manager = AbilityManager(owner_id="order-agent")
+    for name in ("read_file", "bash"):
+        manager.add(ToolCard(id=name, name=name))
+    manager.add(ToolCard(id="glob", name="glob"))
+
+    assert [info.name for info in await manager.list_tool_info()] == ["bash", "glob", "read_file"]
+    assert [info.name for info in await manager.list_tool_info(names=["read_file", "bash"])] == [
+        "bash",
+        "read_file",
+    ]

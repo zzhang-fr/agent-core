@@ -1199,12 +1199,15 @@ class AbilityManager:
             mcp_server_name: Filter by MCP server name (optional)
 
         Returns:
-            List of ToolInfo objects for LLM
+            List of ToolInfo objects for LLM. Tools are listed by name, so the
+            list does not depend on when each tool was registered and a
+            provider's prompt cache keeps matching it.
         """
         tool_infos: List[ToolInfo] = []
 
-        # Convert ToolCards to ToolInfo
-        for name, tool_card in self._prioritize_paid_search(list(self._tools.items())):
+        # Convert ToolCards to ToolInfo, by name
+        tool_items = sorted(self._tools.items(), key=lambda item: item[0])
+        for name, tool_card in self._prioritize_paid_search(tool_items):
             if names is None or name in names:
                 id_in_tool_card = tool_card.id
                 if not self._is_tool_in_mcp_server(id_in_tool_card):
