@@ -1051,9 +1051,17 @@ class ReadFileTool(Tool):
         if not isinstance(content, bytes):
             raise RuntimeError("PDF content is not bytes")
 
-        with pdfplumber.open(io.BytesIO(content)) as pdf:
+        file_name = os.path.basename(file_path)
+        pdf = None
+        try:
+            pdf = pdfplumber.open(io.BytesIO(content))
             total_pages = len(pdf.pages)
+        except Exception as exc:
+            if pdf is not None:
+                pdf.close()
+            raise RuntimeError(self._pdf_unreadable_message(file_name, exc)) from exc
 
+        with pdf:
             # Require pages param when document is too long to inline safely.
             if not pages and total_pages > self.PDF_AT_MENTION_INLINE_THRESHOLD:
                 raise RuntimeError(
@@ -1078,8 +1086,15 @@ class ReadFileTool(Tool):
             budget = _TokenBudget(self.MAX_TOKENS)
             parts = []
             extracted_count = 0
+            pages_without_text = []
             for page_no in range(start, end + 1):
-                page_text = pdf.pages[page_no - 1].extract_text() or ""
+                try:
+                    page_text = pdf.pages[page_no - 1].extract_text() or ""
+                except Exception as exc:
+                    raise RuntimeError(self._pdf_unreadable_message(file_name, exc, page_no)) from exc
+                has_text = bool(page_text.strip())
+                if not has_text:
+                    page_text = f"[no text on page {page_no} (scanned image?)]"
                 page_block = f"## Page {page_no}\n{page_text}".rstrip()
                 page_tokens = self._estimate_tokens(page_block)
                 if extracted_count > 0 and not budget.can_fit(page_tokens):
@@ -1091,7 +1106,28 @@ class ReadFileTool(Tool):
                 budget.spend(page_tokens)
                 parts.append(page_block)
                 extracted_count += 1
+                if not has_text:
+                    pages_without_text.append(page_no)
+            if pages_without_text:
+                parts.append(self._pdf_pages_without_text_note(pages_without_text))
             return "\n\n".join(parts).strip()
+
+    @staticmethod
+    def _pdf_pages_without_text_note(page_numbers: List[int]) -> str:
+        listed = ", ".join(str(page_no) for page_no in page_numbers)
+        return (
+            f"[Pages without text: {listed}. They are probably scanned images; "
+            "use an image or OCR tool on them if their content is needed.]"
+        )
+
+    @staticmethod
+    def _pdf_unreadable_message(file_name: str, exc: Exception, page_no: Optional[int] = None) -> str:
+        where = f" (page {page_no})" if page_no is not None else ""
+        cause = str(exc).strip() or type(exc).__name__
+        return (
+            f"Could not read PDF '{file_name}'{where}: {cause}. "
+            "The file may be damaged or incomplete; ask for a readable copy."
+        )
 
     @staticmethod
     def _estimate_base64_tokens(byte_length: int) -> int:

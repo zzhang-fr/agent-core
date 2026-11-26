@@ -1313,6 +1313,95 @@ async def test_read_pdf_truncation_on_token_budget(sys_op, temp_dir, monkeypatch
     assert f"{ReadFileTool.MAX_TOKENS}-token budget reached" in content
 
 
+
+def _pdf_bytes(page_streams):
+    """A small valid PDF: one page per stream; an empty stream is a page with no text layer."""
+    count = len(page_streams)
+    kids = " ".join(f"{3 + 2 * i} 0 R" for i in range(count))
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
+               f"<< /Type /Pages /Kids [{kids}] /Count {count} >>".encode()]
+    for i, stream in enumerate(page_streams):
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents {4 + 2 * i} 0 R "
+            f"/Resources << /Font << /F1 {3 + 2 * count} 0 R >> >> >>".encode()
+        )
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    data = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(data))
+        data += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(data)
+    data += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    data += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    data += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(data)
+
+
+_TEXT_STREAM = b"BT /F1 12 Tf 20 250 Td (Invoice 42) Tj ET"
+
+
+@pytest.mark.asyncio
+async def test_read_pdf_marks_a_page_without_text(sys_op, temp_dir):
+    file_path = os.path.join(temp_dir, "scan.pdf")
+    with open(file_path, "wb") as fh:
+        fh.write(_pdf_bytes([b""]))
+
+    result = await ReadFileTool(sys_op).invoke({"file_path": file_path})
+
+    assert result.success is True
+    content = result.data["content"]
+    assert content.startswith("## Page 1\n[no text on page 1 (scanned image?)]")
+    assert "[Pages without text: 1. They are probably scanned images;" in content
+
+
+@pytest.mark.asyncio
+async def test_read_pdf_lists_only_the_pages_without_text(sys_op, temp_dir):
+    file_path = os.path.join(temp_dir, "mixed.pdf")
+    with open(file_path, "wb") as fh:
+        fh.write(_pdf_bytes([_TEXT_STREAM, b"", _TEXT_STREAM, b""]))
+
+    result = await ReadFileTool(sys_op).invoke({"file_path": file_path})
+
+    assert result.success is True
+    content = result.data["content"]
+    assert "## Page 1\nInvoice 42" in content
+    assert "## Page 3\nInvoice 42" in content
+    assert "[no text on page 2 (scanned image?)]" in content
+    assert "[no text on page 4 (scanned image?)]" in content
+    assert "[no text on page 1" not in content
+    assert content.endswith(
+        "[Pages without text: 2, 4. They are probably scanned images; "
+        "use an image or OCR tool on them if their content is needed.]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_pdf_with_text_has_no_note(sys_op, temp_dir):
+    file_path = os.path.join(temp_dir, "text.pdf")
+    with open(file_path, "wb") as fh:
+        fh.write(_pdf_bytes([_TEXT_STREAM]))
+
+    result = await ReadFileTool(sys_op).invoke({"file_path": file_path})
+
+    assert result.success is True
+    assert result.data["content"] == "## Page 1\nInvoice 42"
+
+
+@pytest.mark.asyncio
+async def test_read_pdf_names_the_file_it_cannot_read(sys_op, temp_dir):
+    file_path = os.path.join(temp_dir, "contract.pdf")
+    with open(file_path, "wb") as fh:
+        fh.write(_pdf_bytes([_TEXT_STREAM] * 3)[:200])
+
+    result = await ReadFileTool(sys_op).invoke({"file_path": file_path})
+
+    assert result.success is False
+    assert result.error.startswith("Could not read PDF 'contract.pdf': ")
+    assert result.error.endswith("The file may be damaged or incomplete; ask for a readable copy.")
+
+
 # ── history path construction ─────────────────────────────────
 
 
