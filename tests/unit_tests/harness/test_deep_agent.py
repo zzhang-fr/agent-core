@@ -442,6 +442,30 @@ async def test_register_and_unregister_rail() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unregister_awaits_the_rails_release_before_uninit() -> None:
+    agent = DeepAgent(AgentCard(name="deep", description="test")).configure(DeepAgentConfig(enable_task_loop=False))
+    fake_react = FakeReactAgent()
+    agent.set_react_agent(fake_react, initialized=True)
+    events: List[str] = []
+
+    class ReleasingRail(CountingRail):
+        async def on_unregister(self, owner) -> None:
+            assert owner is agent
+            await asyncio.sleep(0)
+            events.append("released")
+
+        def uninit(self, owner) -> None:
+            events.append("uninit")
+
+    rail = ReleasingRail()
+    await agent.register_rail(rail)
+    await agent.unregister_rail(rail)
+
+    assert events == ["released", "uninit"]
+    assert fake_react.agent_callback_manager.unregister_calls[0][0] is rail
+
+
+@pytest.mark.asyncio
 async def test_outer_rails_are_isolated_between_same_card_id_agents() -> None:
     card = AgentCard(
         id="shared-deep-agent-card",

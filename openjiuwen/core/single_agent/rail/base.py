@@ -945,6 +945,15 @@ class AgentRail(ABC):
     def uninit(self, agent):
         pass
 
+    async def on_unregister(self, agent) -> None:
+        """Release what the rail holds in a live agent that unregisters it.
+
+        ``DeepAgent.unregister_rail`` awaits it after the rail's callbacks are
+        removed and before ``uninit``. A rail clears here the async state it
+        keeps in the agent, such as a prompt attachment, so that the agent's
+        next request does not see it.
+        """
+
     # -- hook methods (override to activate) --
 
     async def before_invoke(
