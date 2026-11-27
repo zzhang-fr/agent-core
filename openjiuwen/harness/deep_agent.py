@@ -2579,6 +2579,9 @@ class DeepAgent(BaseAgent):
             await self._react_agent.agent_callback_manager.unregister_rail(
                 rail, self._react_agent
             )
+        on_unregister = getattr(rail, "on_unregister", None)
+        if on_unregister is not None:
+            await on_unregister(self)
         rail.uninit(self)
         return self
 
